@@ -1,0 +1,4 @@
+node_modules/
+alipay.config.json
+.orders.json
+.env

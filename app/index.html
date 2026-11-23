@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>BillCheck Genie · Smart Receipt Checker</title>
+<style>
+  :root { --bg:#0f1420; --card:#1a2233; --line:#2a3550; --txt:#eef1f8; --dim:#8b94ab; --acc:#ffb02e; --green:#35d07f; --red:#ff5c5c; }
+  * { box-sizing:border-box; margin:0; padding:0; -webkit-tap-highlight-color:transparent; }
+  body { background:var(--bg); color:var(--txt); font:15px/1.6 -apple-system,"PingFang SC","Microsoft YaHei"; }
+  .phone { max-width:400px; margin:0 auto; min-height:100vh; padding:20px 18px 40px; }
+  h1 { font-size:19px; text-align:center; margin:8px 0 2px; }
+  .sub { text-align:center; color:var(--dim); font-size:12px; margin-bottom:22px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:16px; margin-bottom:14px; }
+  .btn { width:100%; border:0; border-radius:12px; padding:14px; font-size:15px; font-weight:700; cursor:pointer; font-family:inherit; }
+  .btn-primary { background:var(--acc); color:#241a05; }
+  .btn-ghost { background:transparent; color:var(--acc); border:1px dashed var(--acc); margin-top:10px; }
+  .btn:disabled { opacity:.4; cursor:not-allowed; }
+  .step-tag { display:inline-block; font-size:11px; color:var(--dim); border:1px solid var(--line); border-radius:999px; padding:1px 10px; margin-bottom:10px; }
+  #preview { width:100%; border-radius:10px; display:none; }
+  .scanline { height:2px; background:var(--acc); box-shadow:0 0 12px var(--acc); position:relative; overflow:hidden; border-radius:2px; margin:10px 0; }
+  .scanline i { position:absolute; top:0; bottom:0; width:30%; background:#fff3; animation:scan 1.2s linear infinite; }
+  @keyframes scan { from { left:-30% } to { left:100% } }
+  .items { font-size:13px; }
+  .items .row { display:flex; justify-content:space-between; padding:6px 0; border-bottom:1px solid var(--line); }
+  .dup { color:var(--red); font-weight:700; }
+  .finding { border-left:3px solid var(--red); background:#2a1a1f; border-radius:8px; padding:10px 12px; margin:8px 0; font-size:13px; }
+  .finding b { color:var(--red); }
+  .finding.ok { border-color:var(--green); background:#12241c; }
+  .finding.ok b { color:var(--green); }
+  .total { display:flex; justify-content:space-between; font-size:16px; font-weight:800; margin-top:12px; }
+  .refund { color:var(--red); }
+  .pay-sheet { position:fixed; inset:0; background:#000a; display:none; align-items:flex-end; justify-content:center; z-index:9; }
+  .pay-card { width:400px; max-width:100%; background:var(--card); border-radius:18px 18px 0 0; padding:22px 18px 30px; }
+  .pay-card .amt { font-size:34px; font-weight:900; text-align:center; margin:10px 0 2px; }
+  .pay-card .lbl { text-align:center; color:var(--dim); font-size:12px; margin-bottom:16px; }
+  .free-badge { background:#12241c; color:var(--green); border-radius:999px; padding:2px 12px; font-size:12px; }
+  .hidden { display:none !important; }
+  .foot { text-align:center; color:var(--dim); font-size:10px; margin-top:24px; }
+</style>
+</head>
+<body>
+<div class="phone">
+  <h1>🧾 BillCheck Genie</h1>
+  <p class="sub">Snap a receipt · AI catches overcharges, duplicates & missed discounts · One check, one payment</p>
+
+  <!-- Step 1: Upload -->
+  <div class="card" id="step1">
+    <span class="step-tag">STEP 1 · Snap Receipt</span>
+    <img id="preview" alt="Receipt preview">
+    <button class="btn btn-primary" id="pick">📷 Take Photo / Pick Image</button>
+    <button class="btn btn-ghost" id="demo">🧪 Demo with Sample Receipt</button>
+    <input type="file" id="file" accept="image/*" hidden>
+  </div>
+
+  <!-- Step 2: Recognition -->
+  <div class="card hidden" id="step2">
+    <span class="step-tag">STEP 2 · AI Scanning</span>
+    <div class="scanline"><i></i></div>
+    <div id="scanMsg" style="color:var(--dim);font-size:13px">Multimodal model reading item lines…</div>
+  </div>
+
+  <!-- Step 3: Report -->
+  <div class="card hidden" id="step3">
+    <span class="step-tag">STEP 3 · Check Report</span>
+    <div class="items" id="items"></div>
+    <div id="findings" style="margin-top:12px"></div>
+    <div class="total"><span>Receipt Total</span><span>¥128.50</span></div>
+    <div class="total"><span>Suspected Overcharge</span><span class="refund">-¥18.50</span></div>
+    <button class="btn btn-primary" id="pay" style="margin-top:14px">🔓 Pay ¥0.5 to Unlock Full Report <span class="free-badge">First check free</span></button>
+  </div>
+
+  <p class="foot">Alipay AI Pay PAYATHON 2026 · Vibe Pay track<br>Real payment via Alipay (alipay.trade.page.pay) · ¥0.5 per report</p>
+</div>
+
+<div class="pay-sheet" id="paySheet">
+  <div class="pay-card">
+    <div style="text-align:center;font-size:14px">BillCheck Genie · Deep Check Service</div>
+    <div class="amt">¥0.50</div>
+    <div class="lbl">Alipay AI Pay · one check, one charge</div>
+    <button class="btn btn-primary" id="confirmPay">✅ Confirm Payment ¥0.5 (Alipay)</button>
+    <button class="btn btn-ghost" id="cancelPay">Cancel</button>
+  </div>
+</div>
+
+<script>
+const $ = s => document.querySelector(s);
+const SAMPLE_ITEMS = [
+  { name: 'Fragrant Rice 5kg', price: 39.90, flag: null },
+  { name: 'Pure Milk 250ml×12', price: 45.00, flag: null },
+  { name: 'Eggs 30-pack', price: 18.50, flag: 'dup' },
+  { name: 'Eggs 30-pack', price: 18.50, flag: 'dup' },
+  { name: 'Tomatoes 500g', price: 6.60, flag: 'over' },
+];
+const FINDINGS = [
+  { ok: false, text: '<b>Duplicate charge</b>: Eggs 30-pack appears 2 times (¥18.50 ×2). This item is commonly double-scanned at the register; we recommend checking the actual quantity.' },
+  { ok: false, text: '<b>Abnormal unit price</b>: Tomatoes 500g charged at ¥6.60; the promo price should be ¥3.30 (member discount not applied).' },
+  { ok: true, text: '<b>Passed checks</b>: The remaining 3 items match shelf prices; no missed scans.' },
+];
+
+$('#pick').onclick = () => $('#file').click();
+$('#file').onchange = (e) => {
+  const f = e.target.files[0];
+  if (!f) return;
+  const url = URL.createObjectURL(f);
+  startFlow(url);
+};
+$('#demo').onclick = () => startFlow(null);
+
+function startFlow(imgUrl) {
+  if (imgUrl) { $('#preview').src = imgUrl; $('#preview').style.display = 'block'; }
+  $('#step2').classList.remove('hidden');
+  $('#step3').classList.add('hidden');
+  const msgs = ['Multimodal model reading item lines…', 'Structuring 12 item lines with prices…', 'Comparing against common prices & promo database…', 'Generating check report…'];
+  let i = 0;
+  const t = setInterval(() => { $('#scanMsg').textContent = msgs[Math.min(++i, msgs.length - 1)]; }, 900);
+  setTimeout(() => { clearInterval(t); showReport(); }, 4200);
+}
+
+function showReport() {
+  $('#step2').classList.add('hidden');
+  $('#step3').classList.remove('hidden');
+  $('#items').innerHTML = SAMPLE_ITEMS.map(it =>
+    `<div class="row"><span class="${it.flag === 'dup' ? 'dup' : ''}">${it.name}${it.flag === 'dup' ? ' ⚠️' : ''}</span><span>¥${it.price.toFixed(2)}</span></div>`).join('');
+  $('#findings').innerHTML = FINDINGS.map(f => `<div class="finding ${f.ok ? 'ok' : ''}">${f.text}</div>`).join('');
+}
+
+$('#pay').onclick = () => { $('#paySheet').style.display = 'flex'; };
+$('#cancelPay').onclick = () => { $('#paySheet').style.display = 'none'; };
+$('#confirmPay').onclick = async () => {
+  const btn = $('#confirmPay');
+  btn.disabled = true; const old = btn.textContent; btn.textContent = '… Creating Alipay order';
+  try {
+    const r = await fetch('/api/pay/create', { method: 'POST' });
+    const j = await r.json();
+    if (!r.ok) { btn.disabled = false; btn.textContent = old; alert(j.message || 'Payment unavailable'); return; }
+    // paymentHtml 是含自动提交脚本的 HTML form，必须渲染再提交，不能 URL 跳转
+    const c = document.createElement('div');
+    c.innerHTML = j.paymentHtml;
+    c.style.cssText = 'position:fixed;inset:0;z-index:99999;background:#fff';
+    document.body.appendChild(c);
+    const f = c.querySelector('form');
+    if (f) f.submit();
+  } catch (e) {
+    btn.disabled = false; btn.textContent = old; alert('Network error: ' + e.message);
+  }
+};
+</script>
+</body>
+</html>
