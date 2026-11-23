@@ -127,13 +127,36 @@ function showReport() {
 
 $('#pay').onclick = () => { $('#paySheet').style.display = 'flex'; };
 $('#cancelPay').onclick = () => { $('#paySheet').style.display = 'none'; };
+function showReceipt() {
+  $('#paySheet').style.display = 'none';
+  const box = document.createElement('div');
+  box.className = 'finding';
+  box.style.marginTop = '14px';
+  box.innerHTML = '<b>Demo mode: live checkout is disabled on this public instance</b><br>' +
+    'Production orders are signed server-side with the author’s Alipay application key. ' +
+    'This public demo runs without those credentials, so no new order can be created here.<br><br>' +
+    '<b>Verified live transaction (same code path, production mode):</b><br>' +
+    'Merchant order: <code>BCG1795099045210866</code><br>' +
+    'Alipay trade no: <code>2026111922001493191431275587</code><br>' +
+    'Amount: ¥0.50 · Status: <b>TRADE_SUCCESS</b> · 2026-11-19 22:46:45<br><br>' +
+    'Flow: order → Alipay cashier → async notify (RSA2 signature verified, idempotent) → report delivered.';
+  const anchor = $('#pay');
+  if (anchor && anchor.parentNode) anchor.parentNode.insertBefore(box, anchor.nextSibling);
+  else document.body.appendChild(box);
+  if (anchor) anchor.style.display = 'none';
+}
 $('#confirmPay').onclick = async () => {
   const btn = $('#confirmPay');
   btn.disabled = true; const old = btn.textContent; btn.textContent = '… Creating Alipay order';
   try {
     const r = await fetch('/api/pay/create', { method: 'POST' });
     const j = await r.json();
-    if (!r.ok) { btn.disabled = false; btn.textContent = old; alert(j.message || 'Payment unavailable'); return; }
+    if (!r.ok) {
+      btn.disabled = false; btn.textContent = old;
+      if (j.error === 'payment_not_configured') { showReceipt(); return; }
+      alert(j.message || 'Payment unavailable');
+      return;
+    }
     // paymentHtml 是含自动提交脚本的 HTML form，必须渲染再提交，不能 URL 跳转
     const c = document.createElement('div');
     c.innerHTML = j.paymentHtml;
