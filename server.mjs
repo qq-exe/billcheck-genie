@@ -45,6 +45,8 @@ if (PAY_CONFIG) {
 }
 
 const PUBLIC_BASE_URL = PAY_CONFIG?.publicBaseUrl || '';
+// 托管平台用 sharecode 做访问门禁，回跳地址需带上，否则付款后落到“链接不完整”页
+const RETURN_SHARE_CODE = process.env.RETURN_SHARE_CODE || PAY_CONFIG?.shareCode || '';
 
 // ---- 订单持久化（JSON 文件；生产建议换 DB） ----
 const ORDERS_FILE = path.join(process.env.DATA_DIR || __dirname, '.orders.json');
@@ -90,7 +92,9 @@ app.post('/api/pay/create', (req, res) => {
   saveOrders(orders);
 
   const requestOptions = {
-    returnUrl: (PUBLIC_BASE_URL || `${req.protocol}://${req.get('host')}`) + '/return',
+    method: 'POST',
+    returnUrl: (PUBLIC_BASE_URL || `${req.protocol}://${req.get('host')}`) + '/return'
+      + (RETURN_SHARE_CODE ? `?sharecode=${encodeURIComponent(RETURN_SHARE_CODE)}` : ''),
     bizContent: {
       out_trade_no: outTradeNo,
       total_amount: totalAmount,
@@ -102,7 +106,8 @@ app.post('/api/pay/create', (req, res) => {
   if (notifyUrl) requestOptions.notifyUrl = notifyUrl;
 
   try {
-    const paymentHtml = alipaySdk.pageExec('alipay.trade.page.pay', 'POST', requestOptions);
+    // 注意：pageExec(method, params) 只有两个参数，POST 需通过 params.method 指定
+    const paymentHtml = alipaySdk.pageExec('alipay.trade.page.pay', requestOptions);
     res.json({ out_trade_no: outTradeNo, paymentHtml });
   } catch (e) {
     res.status(500).json({ error: 'create_failed', message: (e?.message || '').slice(0, 200) });
@@ -121,16 +126,19 @@ app.get('/api/pay/status', async (req, res) => {
   try {
     const r = await alipaySdk.exec('alipay.trade.query', { bizContent: { out_trade_no: no } });
     const t = r?.alipay_trade_query_response || r || {};
-    if (t.trade_status === 'TRADE_SUCCESS' || t.trade_status === 'TRADE_FINISHED') {
+    // SDK 可能返回 snake_case 或 camelCase，两种都兼容
+    const status = t.trade_status || t.tradeStatus || '';
+    const tradeNo = t.trade_no || t.tradeNo || null;
+    if (status === 'TRADE_SUCCESS' || status === 'TRADE_FINISHED') {
       if (!o.paid_at) {
-        o.status = t.trade_status;
+        o.status = status;
         o.paid_at = new Date().toISOString();
-        o.trade_no = t.trade_no || null;
+        o.trade_no = tradeNo;
         saveOrders(orders);
       }
-      return res.json({ status: t.trade_status, paid: true, trade_no: t.trade_no });
+      return res.json({ status, paid: true, trade_no: tradeNo });
     }
-    return res.json({ status: t.trade_status || o.status, paid: false });
+    return res.json({ status: status || o.status, paid: false });
   } catch (e) {
     const msg = e?.message || '';
     if (/TRADE_NOT_EXIST/i.test(msg)) return res.json({ status: o.status, paid: false });
@@ -197,11 +205,12 @@ app.post('/api/pay/refund', async (req, res) => {
       bizContent: { out_trade_no, refund_amount: String(refund_amount), out_request_no: outRequestNo },
     });
     const t = r?.alipay_trade_refund_response || r || {};
-    if (t.code !== '10000') return res.status(502).json({ error: t.sub_msg || t.msg || 'refund_failed', code: t.code });
+    if (t.code !== '10000') return res.status(502).json({ error: t.sub_msg || t.subMsg || t.msg || 'refund_failed', code: t.code });
+    const fundChange = t.fund_change || t.fundChange || 'N';
     o.refund_request_no = outRequestNo;
-    o.fund_change = t.fund_change || 'N';
+    o.fund_change = fundChange;
     saveOrders(orders);
-    return res.json({ code: t.code, fund_change: t.fund_change || 'N', out_request_no: outRequestNo });
+    return res.json({ code: t.code, fund_change: fundChange, out_request_no: outRequestNo });
   } catch (e) {
     res.status(502).json({ error: (e?.message || 'refund_error').slice(0, 150) });
   }
@@ -218,7 +227,8 @@ app.get('/api/pay/refund/status', async (req, res) => {
       bizContent: { out_trade_no, out_request_no: String(out_request_no || o.refund_request_no) },
     });
     const t = r?.alipay_trade_fastpay_refund_query_response || r || {};
-    return res.json({ refund_status: t.refund_status || 'PENDING', success: t.refund_status === 'REFUND_SUCCESS' });
+    const rs = t.refund_status || t.refundStatus || 'PENDING';
+    return res.json({ refund_status: rs, success: rs === 'REFUND_SUCCESS' });
   } catch (e) {
     res.status(502).json({ error: (e?.message || 'refund_query_error').slice(0, 150) });
   }
