@@ -77,13 +77,18 @@ without it the app falls back to the server proxy (the badge changes from ⚡ to
 #    No billing upgrade: on-device inference never reaches the Gemini API,
 #    so the free Spark plan is sufficient.
 # 2. Register a Web app, paste its config into app/firebase-config.js
-# 3. AI Logic requires App Check. For local runs, a debug token is enough:
+# 3. The console makes you register App Check for AI Logic. The on-device path
+#    does not validate a token, so any registered provider is enough for a demo:
 export FIREBASE_APPCHECK_DEBUG_TOKEN=true     # prints a token in the console; add it in
                                               # Firebase console -> App Check -> Manage debug tokens
 ```
 
 `app/firebase-config.js` is optional: blank the `apiKey` and the app simply uses the server proxy,
 so the demo never breaks.
+
+One measurement worth recording: with a deliberately invalid App Check site key, the on-device path
+still returned a correct report — the token exchange is only a gate on the cloud path. So a deployment
+domain does not have to be registered against the reCAPTCHA key for ⚡ inference to work.
 
 ## Payment integration
 
