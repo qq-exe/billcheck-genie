@@ -17,7 +17,7 @@
   .btn-ghost { background:transparent; color:var(--acc); border:1px dashed var(--acc); margin-top:10px; }
   .btn:disabled { opacity:.4; cursor:not-allowed; }
   .step-tag { display:inline-block; font-size:11px; color:var(--dim); border:1px solid var(--line); border-radius:999px; padding:1px 10px; margin-bottom:10px; }
-  #preview { width:100%; border-radius:10px; display:none; }
+  #preview { width:100%; max-height:220px; object-fit:contain; background:#fff; border-radius:10px; display:none; margin-bottom:10px; }
   .scanline { height:2px; background:var(--acc); box-shadow:0 0 12px var(--acc); position:relative; overflow:hidden; border-radius:2px; margin:10px 0; }
   .scanline i { position:absolute; top:0; bottom:0; width:30%; background:#fff3; animation:scan 1.2s linear infinite; }
   @keyframes scan { from { left:-30% } to { left:100% } }
@@ -30,11 +30,12 @@
   .finding.ok b { color:var(--green); }
   .total { display:flex; justify-content:space-between; font-size:16px; font-weight:800; margin-top:12px; }
   .refund { color:var(--red); }
+  .hint { font-size:11px; color:var(--dim); margin-top:8px; }
   .pay-sheet { position:fixed; inset:0; background:#000a; display:none; align-items:flex-end; justify-content:center; z-index:9; }
   .pay-card { width:400px; max-width:100%; background:var(--card); border-radius:18px 18px 0 0; padding:22px 18px 30px; }
   .pay-card .amt { font-size:34px; font-weight:900; text-align:center; margin:10px 0 2px; }
   .pay-card .lbl { text-align:center; color:var(--dim); font-size:12px; margin-bottom:16px; }
-  .free-badge { background:#12241c; color:var(--green); border-radius:999px; padding:2px 12px; font-size:12px; }
+  .free-badge { display:inline-block; margin-left:6px; white-space:nowrap; background:#12241c; color:var(--green); border-radius:999px; padding:1px 10px; font-size:11px; vertical-align:middle; }
   .hidden { display:none !important; }
   .foot { text-align:center; color:var(--dim); font-size:10px; margin-top:24px; }
 </style>
@@ -44,33 +45,32 @@
   <h1>🧾 BillCheck Genie</h1>
   <p class="sub">Snap a receipt · AI catches overcharges, duplicates & missed discounts · One check, one payment</p>
 
-  <!-- Step 1: Upload -->
   <div class="card" id="step1">
     <span class="step-tag">STEP 1 · Snap Receipt</span>
     <img id="preview" alt="Receipt preview">
     <button class="btn btn-primary" id="pick">📷 Take Photo / Pick Image</button>
-    <button class="btn btn-ghost" id="demo">🧪 Demo with Sample Receipt</button>
+    <button class="btn btn-ghost" id="demo">🧪 Try the sample receipt</button>
     <input type="file" id="file" accept="image/*" hidden>
+    <p class="hint" id="modeHint">Checking model availability…</p>
   </div>
 
-  <!-- Step 2: Recognition -->
   <div class="card hidden" id="step2">
     <span class="step-tag">STEP 2 · AI Scanning</span>
     <div class="scanline"><i></i></div>
-    <div id="scanMsg" style="color:var(--dim);font-size:13px">Multimodal model reading item lines…</div>
+    <div id="scanMsg" style="color:var(--dim);font-size:13px">Reading item lines…</div>
   </div>
 
-  <!-- Step 3: Report -->
   <div class="card hidden" id="step3">
     <span class="step-tag">STEP 3 · Check Report</span>
     <div class="items" id="items"></div>
     <div id="findings" style="margin-top:12px"></div>
-    <div class="total"><span>Receipt Total</span><span>¥128.50</span></div>
-    <div class="total"><span>Suspected Overcharge</span><span class="refund">-¥18.50</span></div>
-    <button class="btn btn-primary" id="pay" style="margin-top:14px">🔓 Pay ¥0.5 to Unlock Full Report <span class="free-badge">First check free</span></button>
+    <div class="total"><span>Receipt Total</span><span id="grandTotal">—</span></div>
+    <div class="total"><span>Suspected Overcharge</span><span class="refund" id="overcharge">—</span></div>
+    <button class="btn btn-primary" id="pay" style="margin-top:14px">🔓 Unlock full report · ¥0.5 <span class="free-badge">First check free</span></button>
+    <p class="hint" id="engineNote"></p>
   </div>
 
-  <p class="foot">Alipay AI Pay PAYATHON 2026 · Vibe Pay track<br>Real payment via Alipay (alipay.trade.page.pay) · ¥0.5 per report</p>
+  <p class="foot">Alipay AI Pay PAYATHON 2026 · Real payment via Alipay (alipay.trade.page.pay) · ¥0.5 per report</p>
 </div>
 
 <div class="pay-sheet" id="paySheet">
@@ -85,46 +85,115 @@
 
 <script>
 const $ = s => document.querySelector(s);
-const SAMPLE_ITEMS = [
-  { name: 'Fragrant Rice 5kg', price: 39.90, flag: null },
-  { name: 'Pure Milk 250ml×12', price: 45.00, flag: null },
-  { name: 'Eggs 30-pack', price: 18.50, flag: 'dup' },
-  { name: 'Eggs 30-pack', price: 18.50, flag: 'dup' },
-  { name: 'Tomatoes 500g', price: 6.60, flag: 'over' },
-];
-const FINDINGS = [
-  { ok: false, text: '<b>Duplicate charge</b>: Eggs 30-pack appears 2 times (¥18.50 ×2). This item is commonly double-scanned at the register; we recommend checking the actual quantity.' },
-  { ok: false, text: '<b>Abnormal unit price</b>: Tomatoes 500g charged at ¥6.60; the promo price should be ¥3.30 (member discount not applied).' },
-  { ok: true, text: '<b>Passed checks</b>: The remaining 3 items match shelf prices; no missed scans.' },
-];
+
+// ---- 识别走服务端 /api/scan：模型 key 只保留在服务器，前端拿不到 ----
+function readAsDataURL(file) {
+  return new Promise((res, rej) => {
+    const fr = new FileReader();
+    fr.onload = () => res(fr.result);
+    fr.onerror = rej;
+    fr.readAsDataURL(file);
+  });
+}
+
+async function scan(imageOrText) {
+  const body = imageOrText.startsWith('data:') ? { image: imageOrText } : { text: imageOrText };
+  const r = await fetch('/api/scan', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  const j = await r.json();
+  if (!r.ok || !j.ok) throw new Error(j.message || j.error || 'scan failed');
+  return j;
+}
+
+// ---- 样例小票：只在点“Try the sample receipt”时使用，明确标注 ----
+const SAMPLE = {
+  merchant: 'Sample Supermarket', currency: 'CNY',
+  items: [
+    { name: 'Fragrant Rice 5kg', qty: 1, unit_price: 39.90, amount: 39.90 },
+    { name: 'Pure Milk 250ml×12', qty: 1, unit_price: 45.00, amount: 45.00 },
+    { name: 'Eggs 30-pack', qty: 1, unit_price: 18.50, amount: 18.50 },
+    { name: 'Eggs 30-pack', qty: 1, unit_price: 18.50, amount: 18.50 },
+    { name: 'Tomatoes 500g', qty: 1, unit_price: 6.60, amount: 6.60 },
+  ],
+  total: 128.50,
+};
+
+function render({ items, findings, total, dupTotal }, engineNote) {
+  // findings 来自服务端：纯文本或带 <b> 的短语
+  $('#items').innerHTML = items.map(it => {
+    const dup = items.filter(x => x.name === it.name).length > 1;
+    return `<div class="row"><span class="${dup ? 'dup' : ''}">${it.name}${dup ? ' ⚠️' : ''}</span><span>¥${(Number(it.amount) || 0).toFixed(2)}</span></div>`;
+  }).join('');
+  $('#findings').innerHTML = findings.map(f => `<div class="finding ${f.ok ? 'ok' : ''}">${f.text}</div>`).join('');
+  $('#grandTotal').textContent = `¥${Number(total).toFixed(2)}`;
+  $('#overcharge').textContent = dupTotal > 0 ? `-¥${dupTotal.toFixed(2)}` : `¥0.00`;
+  $('#engineNote').textContent = engineNote || '';
+  $('#step2').classList.add('hidden');
+  $('#step3').classList.remove('hidden');
+}
 
 $('#pick').onclick = () => $('#file').click();
-$('#file').onchange = (e) => {
+$('#file').onchange = async (e) => {
   const f = e.target.files[0];
   if (!f) return;
   const url = URL.createObjectURL(f);
-  startFlow(url);
-};
-$('#demo').onclick = () => startFlow(null);
-
-function startFlow(imgUrl) {
-  if (imgUrl) { $('#preview').src = imgUrl; $('#preview').style.display = 'block'; }
+  $('#preview').src = url; $('#preview').style.display = 'block';
   $('#step2').classList.remove('hidden');
   $('#step3').classList.add('hidden');
-  const msgs = ['Multimodal model reading item lines…', 'Structuring 12 item lines with prices…', 'Comparing against common prices & promo database…', 'Generating check report…'];
+  $('#scanMsg').textContent = 'Uploading photo to the vision model…';
+  const t0 = Date.now();
+  const tick = setInterval(() => {
+    const s = Math.round((Date.now() - t0) / 1000);
+    $('#scanMsg').textContent = `Reading item lines with the vision model… ${s}s`;
+  }, 1000);
+  try {
+    const dataUrl = await readAsDataURL(f);
+    const r = await scan(dataUrl);
+    clearInterval(tick);
+    render(r, `Model: ${r.engine}${r.merchant ? ' · ' + r.merchant : ''}`);
+  } catch (err) {
+    clearInterval(tick);
+    $('#step2').classList.add('hidden');
+    $('#step3').classList.remove('hidden');
+    $('#items').innerHTML = '';
+    $('#findings').innerHTML = `<div class="finding"><b>Could not read this photo</b>: ${String(err.message || err).slice(0, 160)}<br>Try a sharper, well-lit photo of the item block, or use the sample receipt to see the full flow.</div>`;
+    $('#grandTotal').textContent = '—';
+    $('#overcharge').textContent = '—';
+    $('#engineNote').textContent = '';
+  }
+};
+
+$('#demo').onclick = () => {
+  $('#preview').style.display = 'none';
+  $('#step2').classList.remove('hidden');
+  $('#step3').classList.add('hidden');
+  const msgs = ['Loading sample receipt…', 'Matching line items…', 'Auditing duplicates…', 'Building report…'];
   let i = 0;
-  const t = setInterval(() => { $('#scanMsg').textContent = msgs[Math.min(++i, msgs.length - 1)]; }, 900);
-  setTimeout(() => { clearInterval(t); showReport(); }, 4200);
-}
+  const t = setInterval(() => { $('#scanMsg').textContent = msgs[Math.min(++i, msgs.length - 1)]; }, 500);
+  setTimeout(() => {
+    clearInterval(t);
+    const items = SAMPLE.items;
+    const groups = new Map();
+    for (const it of items) groups.set(it.name, (groups.get(it.name) || 0) + 1);
+    let dupTotal = 0;
+    const findings = [];
+    for (const [name, n] of groups) {
+      if (n > 1) {
+        const unit = Number(items.find(x => x.name === name).amount) || 0;
+        dupTotal += unit * (n - 1);
+        findings.push({ ok: false, text: `<b>Possible duplicate</b>: “${name}” appears ${n} times on the receipt.` });
+      }
+    }
+    if (!findings.length) findings.push({ ok: true, text: '<b>No duplicates found</b>.' });
+    render({ items, findings, total: SAMPLE.total, dupTotal },
+      'Sample receipt · built-in fixture (same audit rules, no model call)');
+  }, 1800);
+};
 
-function showReport() {
-  $('#step2').classList.add('hidden');
-  $('#step3').classList.remove('hidden');
-  $('#items').innerHTML = SAMPLE_ITEMS.map(it =>
-    `<div class="row"><span class="${it.flag === 'dup' ? 'dup' : ''}">${it.name}${it.flag === 'dup' ? ' ⚠️' : ''}</span><span>¥${it.price.toFixed(2)}</span></div>`).join('');
-  $('#findings').innerHTML = FINDINGS.map(f => `<div class="finding ${f.ok ? 'ok' : ''}">${f.text}</div>`).join('');
-}
-
+// ---- 支付：服务端下单，金额服务端硬编码 ¥0.50 ----
 $('#pay').onclick = () => { $('#paySheet').style.display = 'flex'; };
 $('#cancelPay').onclick = () => { $('#paySheet').style.display = 'none'; };
 function showReceipt() {
@@ -132,14 +201,12 @@ function showReceipt() {
   const box = document.createElement('div');
   box.className = 'finding';
   box.style.marginTop = '14px';
-  box.innerHTML = '<b>Demo mode: live checkout is disabled on this public instance</b><br>' +
-    'Production orders are signed server-side with the author’s Alipay application key. ' +
-    'This public demo runs without those credentials, so no new order can be created here.<br><br>' +
-    '<b>Verified live transaction (same code path, production mode):</b><br>' +
+  box.innerHTML = '<b>Live checkout is disabled on this instance</b><br>' +
+    'Production orders are signed server-side with the Alipay application key. Without those credentials no new order can be created here.<br><br>' +
+    '<b>Verified live transaction (same code path):</b><br>' +
     'Merchant order: <code>BCG1795099045210866</code><br>' +
     'Alipay trade no: <code>2026111922001493191431275587</code><br>' +
-    'Amount: ¥0.50 · Status: <b>TRADE_SUCCESS</b> · 2026-11-19 22:46:45<br><br>' +
-    'Flow: order → Alipay cashier → async notify (RSA2 signature verified, idempotent) → report delivered.';
+    'Amount: ¥0.50 · Status: <b>TRADE_SUCCESS</b> · 2026-11-19 22:46:45';
   const anchor = $('#pay');
   if (anchor && anchor.parentNode) anchor.parentNode.insertBefore(box, anchor.nextSibling);
   else document.body.appendChild(box);
@@ -157,7 +224,7 @@ $('#confirmPay').onclick = async () => {
       alert(j.message || 'Payment unavailable');
       return;
     }
-    // paymentHtml 是含自动提交脚本的 HTML form，必须渲染再提交，不能 URL 跳转
+    // paymentHtml 是含自动提交脚本的 form，必须渲染再提交
     const c = document.createElement('div');
     c.innerHTML = j.paymentHtml;
     c.style.cssText = 'position:fixed;inset:0;z-index:99999;background:#fff';
@@ -168,6 +235,20 @@ $('#confirmPay').onclick = async () => {
     btn.disabled = false; btn.textContent = old; alert('Network error: ' + e.message);
   }
 };
+
+// ---- 启动探测：/health 报告识别与收款是否就绪 ----
+(async () => {
+  try {
+    const r = await fetch('/health');
+    const j = await r.json();
+    const parts = [];
+    parts.push('Vision model: server-side (photo → structured items)');
+    parts.push(j.payConfigured ? 'Alipay: live' : 'Alipay: demo mode');
+    $('#modeHint').textContent = parts.join(' · ');
+  } catch {
+    $('#modeHint').textContent = 'Service probe failed — the sample receipt still works end to end.';
+  }
+})();
 </script>
 </body>
 </html>

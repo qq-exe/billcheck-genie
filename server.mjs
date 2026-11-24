@@ -62,11 +62,110 @@ function newOrderNo() {
 
 const app = express();
 app.use(express.urlencoded({ extended: false }));
-app.use(express.json());
+app.use(express.json({ limit: '12mb' }));   // 小票照片以 data URL 上传，需要更大的 body
 app.use(express.static(path.join(__dirname, 'app')));
 
 // 健康检查
 app.get('/health', (_req, res) => res.json({ ok: true, payConfigured: !!alipaySdk }));
+
+// ---- 账单识别：服务端调 WorkBuddy 云服务的免密钥模型（key 不落到前端）----
+const CLOUD_LLM = {
+  endpoint: process.env.WB_CLOUD_ENDPOINT || 'https://billcheck-genie.app.workbuddy.host',
+  key: process.env.WB_CLOUD_KEY || 'wbpk_rOHba4XvQEiDUu6HVEmNpf_n3SpUTtGUsTuhGpnVUD8m3C9PHOVmT9o',
+};
+const SCAN_SYSTEM = [
+  'You are a receipt auditor. Read a photo of a shopping receipt and return strict JSON only, no prose.',
+  'Never invent line items that are not visible in the image. If a value is unreadable, use null.',
+  'Schema: {"merchant":string|null,"currency":string,"items":[{"name":string,"qty":number|null,"unit_price":number|null,"amount":number}],"total":number|null}',
+].join(' ');
+
+function sseContent(text) {
+  let out = '';
+  let model = '';
+  for (const line of text.split('\n')) {
+    if (!line.startsWith('data:')) continue;
+    const raw = line.slice(5).trim();
+    if (!raw || raw === '[DONE]') continue;
+    try {
+      const o = JSON.parse(raw);
+      model = o.model || model;
+      const c = o.choices?.[0]?.delta?.content;
+      if (c) out += c;
+    } catch { /* 忽略心跳/非 JSON 行 */ }
+  }
+  return { content: out, model };
+}
+
+async function askModel(userContent) {
+  const r = await fetch(CLOUD_LLM.endpoint + '/.cloud/llm/chat/completions', {
+    method: 'POST',
+    headers: {
+      'x-wb-webapp-access-key': CLOUD_LLM.key,
+      'Content-Type': 'application/json',
+      Origin: CLOUD_LLM.endpoint,
+    },
+    body: JSON.stringify({
+      // 托管反代有 60s 上限：用快速视觉模型 + 限制输出长度，实测 ~3s
+      model: process.env.WB_CLOUD_MODEL || 'glm-5.3-flash',
+      stream: true,
+      max_tokens: 1200,
+      temperature: 0.1,
+      messages: [{ role: 'system', content: SCAN_SYSTEM }, { role: 'user', content: userContent }],
+    }),
+    signal: AbortSignal.timeout(90000),
+  });
+  if (!r.ok) throw new Error(`model HTTP ${r.status}: ${(await r.text()).slice(0, 160)}`);
+  const { content, model } = sseContent(await r.text());
+  const m = content.match(/\{[\s\S]*\}/);
+  if (!m) throw new Error('model returned no JSON');
+  return { receipt: JSON.parse(m[0]), model };
+}
+
+// 只做算术与重复项核查，不猜市场价格
+function auditReceipt(receipt) {
+  const items = (receipt.items || []).filter(i => i && i.name);
+  const groups = new Map();
+  const findings = [];
+  let dupTotal = 0;
+  for (const it of items) {
+    const k = String(it.name).toLowerCase().replace(/\s+/g, ' ').trim();
+    groups.set(k, (groups.get(k) || []).concat([it]));
+  }
+  for (const [name, g] of groups) {
+    if (g.length > 1) {
+      const unit = Number(g[0].amount ?? g[0].unit_price ?? 0) || 0;
+      dupTotal += unit * (g.length - 1);
+      findings.push({ ok: false, text: `Possible duplicate: "${g[0].name}" appears ${g.length} times (x${unit.toFixed(2)}).` });
+    }
+  }
+  const sum = items.reduce((a, it) => a + (Number(it.amount) || 0), 0);
+  const total = Number(receipt.total);
+  if (Number.isFinite(total) && total > 0 && Math.abs(sum - total) > 0.05) {
+    findings.push({ ok: false, text: `Line items do not add up: items sum to ${sum.toFixed(2)}, printed total is ${total.toFixed(2)}.` });
+  }
+  if (!findings.length) findings.push({ ok: true, text: `No duplicates found: ${items.length} line items reconcile with the printed total.` });
+  return { items, findings, sum, total: Number.isFinite(total) ? total : sum, dupTotal };
+}
+
+app.post('/api/scan', async (req, res) => {
+  const image = typeof req.body?.image === 'string' ? req.body.image : '';
+  const text = typeof req.body?.text === 'string' ? req.body.text.slice(0, 4000) : '';
+  if (!image && !text) return res.status(400).json({ error: 'empty_input' });
+  if (image && !/^data:image\/(png|jpe?g|webp);base64,/.test(image)) return res.status(400).json({ error: 'bad_image' });
+  if (image.length > 11 * 1024 * 1024) return res.status(413).json({ error: 'image_too_large' });
+
+  try {
+    const content = image
+      ? [{ type: 'text', text: 'Read every line item on this receipt. Return JSON only.' }, { type: 'image_url', image_url: { url: image } }]
+      : `Read this receipt text and return JSON only:\n${text}`;
+    const { receipt, model } = await askModel(content);
+    const report = auditReceipt(receipt);
+    res.json({ ok: true, ...report, merchant: receipt.merchant || null, engine: `${model} · ${new Date().toISOString().slice(0, 10)}` });
+  } catch (e) {
+    res.status(502).json({ error: 'scan_failed', message: String(e.message || e).slice(0, 200) });
+  }
+});
+
 
 // ---- 下单：返回支付宝收银台 HTML 表单 ----
 app.post('/api/pay/create', (req, res) => {
