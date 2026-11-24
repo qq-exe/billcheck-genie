@@ -17,7 +17,7 @@
   .btn-ghost { background:transparent; color:var(--acc); border:1px dashed var(--acc); margin-top:10px; }
   .btn:disabled { opacity:.4; cursor:not-allowed; }
   .step-tag { display:inline-block; font-size:11px; color:var(--dim); border:1px solid var(--line); border-radius:999px; padding:1px 10px; margin-bottom:10px; }
-  #preview { width:100%; max-height:220px; object-fit:contain; background:#fff; border-radius:10px; display:none; margin-bottom:10px; }
+  #preview { width:100%; max-height:220px; object-fit:contain; background:#0d1117; border-radius:10px; display:none; margin-bottom:10px; }
   .scanline { height:2px; background:var(--acc); box-shadow:0 0 12px var(--acc); position:relative; overflow:hidden; border-radius:2px; margin:10px 0; }
   .scanline i { position:absolute; top:0; bottom:0; width:30%; background:#fff3; animation:scan 1.2s linear infinite; }
   @keyframes scan { from { left:-30% } to { left:100% } }
@@ -43,7 +43,7 @@
 <body>
 <div class="phone">
   <h1>🧾 BillCheck Genie</h1>
-  <p class="sub">Snap a receipt · AI catches overcharges, duplicates & missed discounts · One check, one payment</p>
+  <p class="sub">Snap a receipt · a vision model reads every line · rules flag duplicates and totals that don't add up</p>
 
   <div class="card" id="step1">
     <span class="step-tag">STEP 1 · Snap Receipt</span>
@@ -66,7 +66,8 @@
     <div id="findings" style="margin-top:12px"></div>
     <div class="total"><span>Receipt Total</span><span id="grandTotal">—</span></div>
     <div class="total"><span>Suspected Overcharge</span><span class="refund" id="overcharge">—</span></div>
-    <button class="btn btn-primary" id="pay" style="margin-top:14px">🔓 Unlock full report · ¥0.5 <span class="free-badge">First check free</span></button>
+    <button class="btn btn-primary" id="pay" style="margin-top:14px">🔓 Unlock full report · ¥0.5</button>
+    <p class="hint" style="text-align:center;margin-top:6px"><span class="free-badge" style="margin:0">First check free</span></p>
     <p class="hint" id="engineNote"></p>
   </div>
 
