@@ -104,7 +104,7 @@ function readAsDataURL(file) {
 }
 
 async function scan(imageDataUrl) {
-  // 1) 浏览器端 Firebase AI Logic：端侧 Gemini Nano 优先，不可用时自动到云端
+  // 1) 浏览器端 Firebase AI Logic：只用端侧 Gemini Nano，照片不出本机
   if (window.__FIREBASE_CONFIG__) {
     try {
       const mod = await import('./hybrid-ai.js');
@@ -131,17 +131,16 @@ async function scan(imageDataUrl) {
   try {
     const mod = await import('./hybrid-ai.js');
     const a = await mod.onDeviceAvailability();
-    const hasCfg = !!window.__FIREBASE_CONFIG__;
     if (!a.supported) {
-      el.textContent = hasCfg
-        ? 'On-device model not exposed by this browser — inference will run in the cloud.'
-        : 'Cloud inference active. Open in Chrome 139+ to run the on-device model.';
+      el.textContent = 'This browser does not expose the on-device model — using the server-side model instead.';
       return;
     }
     const label = { available: 'available', downloadable: 'needs a one-time download', downloading: 'downloading', unavailable: 'unavailable' }[a.state] || a.state;
-    el.textContent = `On-device model (Gemini Nano): ${label} · hybrid inference prefers on-device`;
+    el.textContent = a.state === 'available'
+      ? 'On-device model (Gemini Nano): available · inference runs on this device'
+      : `On-device model (Gemini Nano): ${label} · keeps the photo on-device`;
   } catch (e) {
-    el.textContent = 'Checking model availability failed — cloud inference will be used.';
+    el.textContent = 'Checking model availability failed — the server-side model will be used.';
   }
 })();
 
@@ -166,9 +165,7 @@ function setSourceBadge(r) {
   el.className = 'src-badge show ' + (device ? 'device' : 'cloud');
   el.textContent = device
     ? '⚡ On-device · Gemini Nano — the photo never left this device'
-    : hybrid
-      ? '☁️ Cloud · Gemini — on-device model unavailable on this browser'
-      : '☁️ Cloud · server proxy';
+    : '☁️ Server-side model — on-device unavailable on this browser';
   el.title = r.fallbackReason ? 'on-device attempt failed: ' + r.fallbackReason : '';
 }
 
