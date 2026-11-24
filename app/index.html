@@ -36,6 +36,10 @@
   .pay-card .amt { font-size:34px; font-weight:900; text-align:center; margin:10px 0 2px; }
   .pay-card .lbl { text-align:center; color:var(--dim); font-size:12px; margin-bottom:16px; }
   .free-badge { display:inline-block; margin-left:6px; white-space:nowrap; background:#12241c; color:var(--green); border-radius:999px; padding:1px 10px; font-size:11px; vertical-align:middle; }
+  .src-badge { display:none; font-size:11px; font-weight:700; border-radius:999px; padding:2px 11px; margin:0 0 10px; letter-spacing:.2px; }
+  .src-badge.show { display:inline-block; }
+  .src-badge.device { background:#12241c; color:var(--green); border:1px solid #2c7a52; }
+  .src-badge.cloud { background:#1b2440; color:#9dbcff; border:1px solid #34457a; }
   .hidden { display:none !important; }
   .foot { text-align:center; color:var(--dim); font-size:10px; margin-top:24px; }
 </style>
@@ -62,6 +66,7 @@
 
   <div class="card hidden" id="step3">
     <span class="step-tag">STEP 3 · Check Report</span>
+    <div class="src-badge" id="srcBadge"></div>
     <div class="items" id="items"></div>
     <div id="findings" style="margin-top:12px"></div>
     <div class="total"><span>Receipt Total</span><span id="grandTotal">—</span></div>
@@ -84,6 +89,7 @@
   </div>
 </div>
 
+<script src="firebase-config.js"></script>
 <script>
 const $ = s => document.querySelector(s);
 
@@ -97,17 +103,47 @@ function readAsDataURL(file) {
   });
 }
 
-async function scan(imageOrText) {
-  const body = imageOrText.startsWith('data:') ? { image: imageOrText } : { text: imageOrText };
+async function scan(imageDataUrl) {
+  // 1) 浏览器端 Firebase AI Logic：端侧 Gemini Nano 优先，不可用时自动到云端
+  if (window.__FIREBASE_CONFIG__) {
+    try {
+      const mod = await import('./hybrid-ai.js');
+      const r = await mod.scanReceipt(imageDataUrl);
+      return { ok: true, ...r, via: 'firebase-ai-logic' };
+    } catch (e) {
+      console.warn('[scan] Firebase AI Logic 路径失败，回落到服务端代理：', e);
+    }
+  }
+  // 2) 兜底：服务端 /api/scan（WorkBuddy 云 LLM，模型 key 只在服务器）
   const r = await fetch('/api/scan', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
+    body: JSON.stringify({ image: imageDataUrl }),
   });
   const j = await r.json();
   if (!r.ok || !j.ok) throw new Error(j.message || j.error || 'scan failed');
-  return j;
+  return { ...j, via: 'server-proxy' };
 }
+
+// 端侧模型可用性（直接问 Chrome 的 Prompt API，不经过 Firebase）
+(async () => {
+  const el = $('#modeHint');
+  try {
+    const mod = await import('./hybrid-ai.js');
+    const a = await mod.onDeviceAvailability();
+    const hasCfg = !!window.__FIREBASE_CONFIG__;
+    if (!a.supported) {
+      el.textContent = hasCfg
+        ? 'On-device model not exposed by this browser — inference will run in the cloud.'
+        : 'Cloud inference active. Open in Chrome 139+ to run the on-device model.';
+      return;
+    }
+    const label = { available: 'available', downloadable: 'needs a one-time download', downloading: 'downloading', unavailable: 'unavailable' }[a.state] || a.state;
+    el.textContent = `On-device model (Gemini Nano): ${label} · hybrid inference prefers on-device`;
+  } catch (e) {
+    el.textContent = 'Checking model availability failed — cloud inference will be used.';
+  }
+})();
 
 // ---- 样例小票：只在点“Try the sample receipt”时使用，明确标注 ----
 const SAMPLE = {
@@ -121,6 +157,20 @@ const SAMPLE = {
   ],
   total: 128.50,
 };
+
+function setSourceBadge(r) {
+  const el = $('#srcBadge');
+  if (!el) return;
+  const hybrid = r.via === 'firebase-ai-logic';
+  const device = hybrid && r.source === 'on_device';
+  el.className = 'src-badge show ' + (device ? 'device' : 'cloud');
+  el.textContent = device
+    ? '⚡ On-device · Gemini Nano — the photo never left this device'
+    : hybrid
+      ? '☁️ Cloud · Gemini — on-device model unavailable on this browser'
+      : '☁️ Cloud · server proxy';
+  el.title = r.fallbackReason ? 'on-device attempt failed: ' + r.fallbackReason : '';
+}
 
 function render({ items, findings, total, dupTotal }, engineNote) {
   // findings 来自服务端：纯文本或带 <b> 的短语
@@ -154,6 +204,7 @@ $('#file').onchange = async (e) => {
     const dataUrl = await readAsDataURL(f);
     const r = await scan(dataUrl);
     clearInterval(tick);
+    setSourceBadge(r);
     render(r, `Model: ${r.engine}${r.merchant ? ' · ' + r.merchant : ''}`);
   } catch (err) {
     clearInterval(tick);
@@ -189,6 +240,7 @@ $('#demo').onclick = () => {
       }
     }
     if (!findings.length) findings.push({ ok: true, text: '<b>No duplicates found</b>.' });
+    $('#srcBadge').className = 'src-badge';
     render({ items, findings, total: SAMPLE.total, dupTotal },
       'Sample receipt · built-in fixture (same audit rules, no model call)');
   }, 1800);

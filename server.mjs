@@ -121,31 +121,8 @@ async function askModel(userContent) {
   return { receipt: JSON.parse(m[0]), model };
 }
 
-// 只做算术与重复项核查，不猜市场价格
-function auditReceipt(receipt) {
-  const items = (receipt.items || []).filter(i => i && i.name);
-  const groups = new Map();
-  const findings = [];
-  let dupTotal = 0;
-  for (const it of items) {
-    const k = String(it.name).toLowerCase().replace(/\s+/g, ' ').trim();
-    groups.set(k, (groups.get(k) || []).concat([it]));
-  }
-  for (const [name, g] of groups) {
-    if (g.length > 1) {
-      const unit = Number(g[0].amount ?? g[0].unit_price ?? 0) || 0;
-      dupTotal += unit * (g.length - 1);
-      findings.push({ ok: false, text: `Possible duplicate: "${g[0].name}" appears ${g.length} times (x${unit.toFixed(2)}).` });
-    }
-  }
-  const sum = items.reduce((a, it) => a + (Number(it.amount) || 0), 0);
-  const total = Number(receipt.total);
-  if (Number.isFinite(total) && total > 0 && Math.abs(sum - total) > 0.05) {
-    findings.push({ ok: false, text: `Line items do not add up: items sum to ${sum.toFixed(2)}, printed total is ${total.toFixed(2)}.` });
-  }
-  if (!findings.length) findings.push({ ok: true, text: `No duplicates found: ${items.length} line items reconcile with the printed total.` });
-  return { items, findings, sum, total: Number.isFinite(total) ? total : sum, dupTotal };
-}
+// 审计逻辑与浏览器端共用同一份实现（app/audit.js），避免两处规则漂移
+import { auditReceipt } from './app/audit.js';
 
 app.post('/api/scan', async (req, res) => {
   const image = typeof req.body?.image === 'string' ? req.body.image : '';

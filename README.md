@@ -2,7 +2,7 @@
 
 **Snap a receipt, get an AI audit of what you were overcharged — one check, one ¥0.5 payment.**
 
-Built for **Alipay AI Pay PAYATHON 2026** (Vibe Pay / machine-pay track) and **SLAY HACKS 2026**.
+Built for **Alipay AI Pay PAYATHON 2026** (Vibe Pay / machine-pay track), **SLAY HACKS 2026** and **Google #BuildHybridAI 2026** (Firebase AI Logic hybrid inference).
 
 | | |
 |---|---|
@@ -25,22 +25,48 @@ Built for **Alipay AI Pay PAYATHON 2026** (Vibe Pay / machine-pay track) and **S
 
 ## How the AI works
 
-There is no hard-coded report. The photo goes to a **vision-capable LLM** and the app parses its JSON output:
+There is no hard-coded report. The photo is turned into structured JSON by a vision model, and the app audits the numbers.
+
+**Primary path — Firebase AI Logic, hybrid inference (browser):**
 
 ```
-browser  --(data URL)-->  POST /api/scan  --(server-side)-->  WorkBuddy Cloud LLM (glm-5.3-flash)
-                                                                      |
-   report  <--(items + findings)--  auditReceipt()  <--(strict JSON)--+
+photo (data URL)
+   └─> Firebase AI Logic SDK  (InferenceMode.PREFER_ON_DEVICE)
+          ├─ on-device: Chrome's built-in Gemini Nano via the Prompt API
+          │     (Chrome desktop 139+, no photo leaves the machine)
+          └─ fallback:  cloud-hosted Gemini through the same SDK
+   └─> strict JSON  ─>  auditReceipt()  ─> report + ⚡/☁️ source badge
 ```
 
-- **Model**: `glm-5.3-flash` through the WorkBuddy Cloud LLM gateway (streaming SSE, keyless for the end user). The access key lives **only on the server** — it is never shipped to the browser.
-- **Prompt**: a system message pins the model to strict JSON and forbids inventing line items; unreadable values must be `null`.
+**Fallback path — server proxy:** if no Firebase config is present, or the AI Logic call fails,
+the same photo goes to `POST /api/scan`, which calls a vision LLM from the server with the key
+kept server-side. The UI badge always says which path actually ran, so nothing here is implied.
+
+- **Code**: `app/hybrid-ai.js` (imports `firebase/ai`, sets `mode: PREFER_ON_DEVICE`, reads `result.inferenceSource`) and `app/audit.js` (one audit implementation shared by browser and Node).
+- **Prompt**: a fixed instruction pins the model to strict JSON and forbids inventing line items; unreadable values must be `null`.
 - **Schema**: `{"merchant","currency","items":[{"name","qty","unit_price","amount"}],"total"}`
 - **Audit**: `auditReceipt()` only does arithmetic — group identical names to surface duplicate scans, and compare the item sum against the printed total. It never guesses market prices.
-- **Latency**: ~4 s end to end (measured on the live host).
+- **Latency**: ~4 s end to end in the cloud path; on-device is faster and works offline.
 - **Failure path**: an unreadable photo returns a plain "could not read this photo" message instead of a fabricated report.
 
 The **Try the sample receipt** button runs the same audit rules on a built-in fixture and is labelled as such — it exists so judges can walk the payment flow without a paper receipt.
+
+## Hybrid inference setup (Firebase AI Logic)
+
+On-device vision needs **Chrome desktop 139+** with
+`chrome://flags/#prompt-api-for-gemini-nano-multimodal-input` enabled; without it the SDK falls
+back to the cloud automatically (the badge changes from ⚡ to ☁️).
+
+```bash
+# 1. Firebase project + AI Logic (Gemini Developer API, no billing needed)
+# 2. Register a Web app, paste its config into app/firebase-config.js
+# 3. AI Logic requires App Check. For local runs, a debug token is enough:
+export FIREBASE_APPCHECK_DEBUG_TOKEN=true     # prints a token in the console; add it in
+                                              # Firebase console -> App Check -> Manage debug tokens
+```
+
+`app/firebase-config.js` ships as `null`. With no config the app simply uses the server proxy,
+so the demo never breaks.
 
 ## Payment integration
 
